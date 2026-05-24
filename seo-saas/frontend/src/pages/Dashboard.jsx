@@ -9,6 +9,7 @@ const tabs = [
     'Schema',
     'Images',
     'Links',
+    'NAP',
     'Actions',
     'Failures'
 ];
@@ -103,6 +104,10 @@ function getIssues(technical, audit) {
         issues.push('Poor performance score');
     }
 
+    if (!technical.napAudit?.hasNAP) {
+        issues.push('NAP information missing');
+    }
+
     return issues;
 }
 
@@ -111,7 +116,8 @@ function getIssuePriority(issue) {
         issue.includes('noindex') ||
         issue.includes('Missing H1') ||
         issue.includes('Title Missing') ||
-        issue.includes('Poor performance')
+        issue.includes('Poor performance') ||
+        issue.includes('NAP')
     ) {
         return 'High';
     }
@@ -171,6 +177,10 @@ function getIssueTask(issue) {
         return 'Optimize images, scripts, render blocking assets, and server response.';
     }
 
+    if (issue.includes('NAP')) {
+        return 'Add business name, address, phone number, and email consistently across the page.';
+    }
+
     return 'Review and fix this SEO issue.';
 }
 
@@ -180,23 +190,48 @@ function getImageRows(audit) {
     const rows = [];
 
     (imageAudit.missingTitleImages || []).forEach((image) => {
-        rows.push([audit.url, 'Missing Title', image.url || image.src || '', '']);
+        rows.push([
+            audit.url,
+            'Missing Title',
+            image.url || image.src || '',
+            ''
+        ]);
     });
 
     (imageAudit.missingAltImages || []).forEach((image) => {
-        rows.push([audit.url, 'Missing ALT', image.url || image.src || '', '']);
+        rows.push([
+            audit.url,
+            'Missing ALT',
+            image.url || image.src || '',
+            ''
+        ]);
     });
 
     (imageAudit.emptyAltImages || []).forEach((image) => {
-        rows.push([audit.url, 'Empty ALT', image.url || image.src || '', '']);
+        rows.push([
+            audit.url,
+            'Empty ALT',
+            image.url || image.src || '',
+            ''
+        ]);
     });
 
     (imageAudit.missingDimensionImages || []).forEach((image) => {
-        rows.push([audit.url, 'Missing Dimensions', image.url || image.src || '', '']);
+        rows.push([
+            audit.url,
+            'Missing Dimensions',
+            image.url || image.src || '',
+            ''
+        ]);
     });
 
     (imageAudit.brokenImageUrls || []).forEach((image) => {
-        rows.push([audit.url, 'Broken Image', image.url || '', image.status || '']);
+        rows.push([
+            audit.url,
+            'Broken Image',
+            image.url || '',
+            image.status || ''
+        ]);
     });
 
     return rows;
@@ -204,16 +239,24 @@ function getImageRows(audit) {
 
 function csvEscape(value) {
     const text = String(value ?? '');
-    return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+    return /[",\n]/.test(text)
+        ? `"${text.replace(/"/g, '""')}"`
+        : text;
 }
 
 function downloadCsv(filename, rows) {
     const csv = rows.map((row) => row.map(csvEscape).join(',')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+
+    const blob = new Blob([csv], {
+        type: 'text/csv;charset=utf-8'
+    });
+
     const link = document.createElement('a');
+
     link.href = URL.createObjectURL(blob);
     link.download = filename;
     link.click();
+
     URL.revokeObjectURL(link.href);
 }
 
@@ -233,10 +276,25 @@ function buildRows(tab, audit) {
             ['Performance', audit.performanceScore],
             ['SEO', audit.seoScore],
             ['Accessibility', audit.accessibilityScore],
-            ['Best Practices', audit.bestPracticesScore]
+            ['Best Practices', audit.bestPracticesScore],
+            [
+                'NAP Found',
+                technical.napAudit?.hasNAP ? 'Yes' : 'No'
+            ]
         ],
+
         Pages: [
-            ['URL', 'Status', 'Indexability', 'Performance', 'SEO', 'Accessibility', 'Best Practices', 'Word Count', 'Issues'],
+            [
+                'URL',
+                'Status',
+                'Indexability',
+                'Performance',
+                'SEO',
+                'Accessibility',
+                'Best Practices',
+                'Word Count',
+                'Issues'
+            ],
             [
                 audit.url,
                 'Lighthouse audit',
@@ -249,8 +307,21 @@ function buildRows(tab, audit) {
                 issues.join('; ')
             ]
         ],
+
         Meta: [
-            ['URL', 'Title', 'Title Length', 'Title Status', 'Meta Description', 'Description Length', 'Description Status', 'Canonical', 'Canonical Matches', 'Robots', 'Indexability'],
+            [
+                'URL',
+                'Title',
+                'Title Length',
+                'Title Status',
+                'Meta Description',
+                'Description Length',
+                'Description Status',
+                'Canonical',
+                'Canonical Matches',
+                'Robots',
+                'Indexability'
+            ],
             [
                 audit.url,
                 technical.titleText || '',
@@ -265,8 +336,17 @@ function buildRows(tab, audit) {
                 technical.indexability || ''
             ]
         ],
+
         Headings: [
-            ['URL', 'H1 Count', 'H1 Text', 'Duplicate H1', 'H2', 'H3', 'Issues'],
+            [
+                'URL',
+                'H1 Count',
+                'H1 Text',
+                'Duplicate H1',
+                'H2',
+                'H3',
+                'Issues'
+            ],
             [
                 audit.url,
                 technical.headings?.h1 || 0,
@@ -277,8 +357,20 @@ function buildRows(tab, audit) {
                 (technical.headingIssues || []).join('; ')
             ]
         ],
+
         Schema: [
-            ['URL', 'Status', 'Types', 'JSON-LD Blocks', 'Valid JSON-LD Blocks', 'Invalid JSON-LD Blocks', 'Microdata Items', 'RDFa Items', 'Missing Required', 'Missing Recommended'],
+            [
+                'URL',
+                'Status',
+                'Types',
+                'JSON-LD Blocks',
+                'Valid JSON-LD Blocks',
+                'Invalid JSON-LD Blocks',
+                'Microdata Items',
+                'RDFa Items',
+                'Missing Required',
+                'Missing Recommended'
+            ],
             [
                 audit.url,
                 technical.schemaAudit?.status || '',
@@ -296,12 +388,20 @@ function buildRows(tab, audit) {
                     .join('; ')
             ]
         ],
+
         Images: [
             ['Page URL', 'Issue Type', 'Image URL', 'Status'],
             ...getImageRows(audit)
         ],
+
         Links: [
-            ['URL', 'Total Links', 'Internal Links', 'External Links', 'Broken Links'],
+            [
+                'URL',
+                'Total Links',
+                'Internal Links',
+                'External Links',
+                'Broken Links'
+            ],
             [
                 audit.url,
                 technical.linkAudit?.totalLinks || 0,
@@ -310,6 +410,28 @@ function buildRows(tab, audit) {
                 technical.linkAudit?.brokenLinks?.length || 0
             ]
         ],
+
+        NAP: [
+            [
+                'URL',
+                'Business Name',
+                'Address',
+                'Phone Numbers',
+                'Emails',
+                'Has NAP'
+            ],
+            [
+                audit.url,
+                technical.napAudit?.businessName || '',
+                (technical.napAudit?.addresses || []).join(' | '),
+                (technical.napAudit?.phones || [])
+    .map(phone => `+91 ${phone}`)
+    .join(' | '),
+                (technical.napAudit?.emails || []).join(' | '),
+                technical.napAudit?.hasNAP ? 'Yes' : 'No'
+            ]
+        ],
+
         Actions: [
             ['URL', 'Issue', 'Priority', 'Recommended Task'],
             ...issues.map((issue) => [
@@ -319,6 +441,7 @@ function buildRows(tab, audit) {
                 getIssueTask(issue)
             ])
         ],
+
         Failures: [['URL', 'Error']]
     };
 
@@ -338,11 +461,16 @@ function TabContent({ tab, audit }) {
                 <Metric label="Partial audits" value={0} />
                 <Metric label="Failed pages" value={0} />
                 <Metric label="Open issues" value={issues.length} />
+                <Metric
+                    label="NAP Found"
+                    value={technical.napAudit?.hasNAP ? 'Yes' : 'No'}
+                />
             </div>
         );
     }
 
     const rows = buildRows(tab, audit);
+
     return <Table headers={rows[0]} rows={rows.slice(1)} />;
 }
 
@@ -358,7 +486,11 @@ function Dashboard() {
     const [error, setError] = useState('');
 
     const displayedAudit = latestAudit;
-    const technical = getTechnicalAudit(displayedAudit);
+
+    const technical = displayedAudit
+    ? getTechnicalAudit(displayedAudit)
+    : {};
+
     const issues = useMemo(
         () => (displayedAudit ? getIssues(technical, displayedAudit) : []),
         [displayedAudit, technical]
@@ -383,14 +515,17 @@ function Dashboard() {
 
     async function runAudit(event) {
         event.preventDefault();
+
         setError('');
         setLatestAudit(null);
         setLoading(true);
 
         try {
             const { data } = await api.post('/audit/run', { url });
+
             setLatestAudit(data.audit);
             setActiveTab('Overview');
+
             await loadHistory();
         } catch (err) {
             setError(err.response?.data?.message || 'Audit failed');
@@ -429,6 +564,7 @@ function Dashboard() {
             <form className="audit-panel" onSubmit={runAudit}>
                 <div className="field-group url-field">
                     <label htmlFor="urlInput">URL</label>
+
                     <input
                         id="urlInput"
                         value={url}
@@ -440,6 +576,7 @@ function Dashboard() {
 
                 <div className="field-group">
                     <span className="field-label">Scope</span>
+
                     <div className="scope-toggle" aria-label="Audit scope">
                         <label>
                             <input
@@ -449,6 +586,7 @@ function Dashboard() {
                                 checked={scope === 'single'}
                                 onChange={() => setScope('single')}
                             />
+
                             <span>Single</span>
                         </label>
 
@@ -460,6 +598,7 @@ function Dashboard() {
                                 checked={scope === 'site'}
                                 onChange={() => setScope('site')}
                             />
+
                             <span>Site</span>
                         </label>
                     </div>
@@ -467,6 +606,7 @@ function Dashboard() {
 
                 <label className="field-group page-limit">
                     <span>Pages</span>
+
                     <input
                         type="number"
                         min="1"
@@ -480,9 +620,14 @@ function Dashboard() {
                     <button className="primary-action" disabled={loading}>
                         {loading ? 'Running...' : 'Run Audit'}
                     </button>
-                    <button type="button" className="secondary-action">
+
+                    <button
+                        type="button"
+                        className="secondary-action"
+                    >
                         PDF
                     </button>
+
                     <button
                         type="button"
                         className="secondary-action"
@@ -494,7 +639,12 @@ function Dashboard() {
             </form>
 
             <main id="results">
-                {error && <div className="error-box wide-card">{error}</div>}
+                {error && (
+                    <div className="error-box wide-card">
+                        {error}
+                    </div>
+                )}
+
                 {loading && (
                     <div className="loading wide-card">
                         Running single page audit...
@@ -505,21 +655,48 @@ function Dashboard() {
                     <>
                         <div className="card">
                             <h2>Pages</h2>
-                            <div className="score unknown">1</div>
-                            <p className="muted">0 failed, 0 partial</p>
+
+                            <div className="score unknown">
+                                1
+                            </div>
+
+                            <p className="muted">
+                                0 failed, 0 partial
+                            </p>
                         </div>
 
-                        {renderScoreCard('Performance', displayedAudit.performanceScore)}
-                        {renderScoreCard('SEO', displayedAudit.seoScore)}
-                        {renderScoreCard('Accessibility', displayedAudit.accessibilityScore)}
-                        {renderScoreCard('Best Practices', displayedAudit.bestPracticesScore)}
+                        {renderScoreCard(
+                            'Performance',
+                            displayedAudit.performanceScore
+                        )}
+
+                        {renderScoreCard(
+                            'SEO',
+                            displayedAudit.seoScore
+                        )}
+
+                        {renderScoreCard(
+                            'Accessibility',
+                            displayedAudit.accessibilityScore
+                        )}
+
+                        {renderScoreCard(
+                            'Best Practices',
+                            displayedAudit.bestPracticesScore
+                        )}
 
                         <div className="card wide-card workbench">
                             <div className="workbench-header">
                                 <h2>SEO Specialist Report</h2>
+
                                 <div className="export-actions">
-                                    <button onClick={exportAll}>Export All CSV</button>
-                                    <button>PDF</button>
+                                    <button onClick={exportAll}>
+                                        Export All CSV
+                                    </button>
+
+                                    <button>
+                                        PDF
+                                    </button>
                                 </div>
                             </div>
 
@@ -527,7 +704,9 @@ function Dashboard() {
                                 {tabs.map((tab) => (
                                     <button
                                         key={tab}
-                                        className={`tab-button ${activeTab === tab ? 'active' : ''}`}
+                                        className={`tab-button ${
+                                            activeTab === tab ? 'active' : ''
+                                        }`}
                                         onClick={() => setActiveTab(tab)}
                                     >
                                         {tab}
@@ -537,11 +716,17 @@ function Dashboard() {
 
                             <div className="tab-content">
                                 <div className="task-toolbar">
-                                    <button onClick={() => exportTab(activeTab)}>
+                                    <button
+                                        onClick={() => exportTab(activeTab)}
+                                    >
                                         Export {activeTab} CSV
                                     </button>
                                 </div>
-                                <TabContent tab={activeTab} audit={displayedAudit} />
+
+                                <TabContent
+                                    tab={activeTab}
+                                    audit={displayedAudit}
+                                />
                             </div>
                         </div>
                     </>
@@ -553,14 +738,17 @@ function Dashboard() {
                     </div>
                 )}
 
-                {!displayedAudit && !historyLoading && history.length > 0 && (
-                    <div className="card wide-card">
-                        <h2>Audit History</h2>
-                        <p className="muted">
-                            {history.length} saved audits in your account.
-                        </p>
-                    </div>
-                )}
+                {!displayedAudit &&
+                    !historyLoading &&
+                    history.length > 0 && (
+                        <div className="card wide-card">
+                            <h2>Audit History</h2>
+
+                            <p className="muted">
+                                {history.length} saved audits in your account.
+                            </p>
+                        </div>
+                    )}
             </main>
         </>
     );

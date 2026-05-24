@@ -272,6 +272,312 @@ function getSchemaAudit($) {
     };
 }
 
+function normalizePhone(phone) {
+    return phone.replace(/\D/g, '');
+}
+
+function normalizeText(text) {
+    return String(text || '')
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function extractFooterText($) {
+    return $('footer').text().replace(/\s+/g, ' ');
+}
+
+function getNAPAudit($) {
+
+    /*
+    |--------------------------------------------------------------------------
+    | PAGE TEXT
+    |--------------------------------------------------------------------------
+    */
+
+    $('script, style, noscript').remove();
+
+const bodyText = $('body')
+    .text()
+    .replace(/\s+/g, ' ')
+    .trim();
+
+    const footerText = extractFooterText($);
+
+    /*
+    |--------------------------------------------------------------------------
+    | PHONE DETECTION
+    |--------------------------------------------------------------------------
+    */
+
+    const phoneRegex =
+    /(?:\+91[\s-]?)?[6-9]\d{9}/g;
+
+const rawPhones =
+    bodyText.match(phoneRegex) || [];
+
+const phones =
+    [...new Set(
+        rawPhones.map(phone => {
+
+            let cleaned =
+                phone.replace(/\D/g, '');
+
+            /*
+            |--------------------------------------------------------------------------
+            | REMOVE COUNTRY CODE
+            |--------------------------------------------------------------------------
+            */
+
+            if (
+                cleaned.startsWith('91') &&
+                cleaned.length === 12
+            ) {
+                cleaned = cleaned.substring(2);
+            }
+
+            return cleaned;
+
+        })
+    )]
+    .filter(phone =>
+        /^[6-9]\d{9}$/.test(phone)
+    );
+
+    /*
+    |--------------------------------------------------------------------------
+    | EMAIL DETECTION
+    |--------------------------------------------------------------------------
+    */
+
+    const emailRegex =
+        /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/ig;
+
+    const emails =
+        [...new Set(
+            bodyText.match(emailRegex) || []
+        )];
+
+    /*
+    |--------------------------------------------------------------------------
+    | BUSINESS NAME
+    |--------------------------------------------------------------------------
+    */
+
+    let businessName = '';
+
+    /*
+    |--------------------------------------------------------------------------
+    | ADDRESS DETECTION
+    |--------------------------------------------------------------------------
+    */
+
+    const addresses = [];
+
+    $('script[type="application/ld+json"]').each((i, el) => {
+
+        try {
+
+            const json =
+                JSON.parse($(el).html());
+
+            const items =
+                flattenSchemaItems(json);
+
+            items.forEach(item => {
+
+                const type =
+                    item?.['@type'];
+
+                /*
+                |--------------------------------------------------------------------------
+                | BUSINESS NAME
+                |--------------------------------------------------------------------------
+                */
+
+                if (
+                    (
+                        type === 'Organization' ||
+                        type === 'LocalBusiness'
+                    ) &&
+                    item.name &&
+                    !businessName
+                ) {
+
+                    businessName = item.name;
+
+                }
+
+                /*
+                |--------------------------------------------------------------------------
+                | ADDRESS
+                |--------------------------------------------------------------------------
+                */
+
+                if (
+                    item.address &&
+                    typeof item.address === 'object'
+                ) {
+
+                    const addr =
+                        item.address;
+
+                    const fullAddress = [
+                        addr.streetAddress,
+                        addr.addressLocality,
+                        addr.addressRegion,
+                        addr.postalCode,
+                        addr.addressCountry
+                    ]
+                    .filter(Boolean)
+                    .join(', ');
+
+                    if (fullAddress) {
+                        addresses.push(fullAddress);
+                    }
+
+                }
+
+            });
+
+        } catch (e) {}
+
+    });
+
+    /*
+    |--------------------------------------------------------------------------
+    | FALLBACK BUSINESS NAME
+    |--------------------------------------------------------------------------
+    */
+
+    if (!businessName) {
+
+        businessName =
+            $('title')
+                .first()
+                .text()
+                .trim();
+
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | REMOVE DUPLICATES
+    |--------------------------------------------------------------------------
+    */
+
+    const uniqueAddresses =
+        [...new Set(addresses)];
+
+    /*
+    |--------------------------------------------------------------------------
+    | CONSISTENCY CHECK
+    |--------------------------------------------------------------------------
+    */
+
+    const issues = [];
+
+    if (!businessName) {
+        issues.push('Business name missing');
+    }
+
+    if (uniqueAddresses.length === 0) {
+        issues.push('Address missing');
+    }
+
+    if (phones.length === 0) {
+        issues.push('Phone number missing');
+    }
+
+    if (emails.length === 0) {
+        issues.push('Email missing');
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | FOOTER CHECK
+    |--------------------------------------------------------------------------
+    */
+
+    const footerIssues = [];
+
+    if (
+        businessName &&
+        !normalizeText(footerText).includes(
+            normalizeText(businessName)
+        )
+    ) {
+
+        footerIssues.push(
+            'Business name not found in footer'
+        );
+
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | CONSISTENCY SCORE
+    |--------------------------------------------------------------------------
+    */
+
+    let score = 100;
+
+    score -= issues.length * 20;
+    score -= footerIssues.length * 10;
+
+    if (score < 0) {
+        score = 0;
+    }
+
+    /*
+    |--------------------------------------------------------------------------
+    | HAS NAP
+    |--------------------------------------------------------------------------
+    */
+
+    const hasNAP =
+        !!businessName &&
+        uniqueAddresses.length > 0 &&
+        phones.length > 0;
+
+    return {
+
+        hasNAP,
+
+        businessName,
+
+        addresses: uniqueAddresses,
+
+        phones,
+
+        emails,
+
+        score,
+
+        issues,
+
+        footerIssues,
+
+        checks: {
+
+            hasBusinessName:
+                !!businessName,
+
+            hasAddress:
+                uniqueAddresses.length > 0,
+
+            hasPhone:
+                phones.length > 0,
+
+            hasEmail:
+                emails.length > 0
+
+        }
+
+    };
+
+}
+
 function getChromeFlags() {
     return [
         '--headless',
@@ -455,6 +761,10 @@ function getPageIssues(technicalAudit, scores) {
         issues.push('Poor performance score');
     }
 
+    if (!technicalAudit.napAudit.hasNAP) {
+        issues.push('NAP information missing');
+    }
+
     return issues;
 }
 
@@ -527,6 +837,12 @@ function getRecommendations(technicalAudit, scores) {
         recommendations.push('Improve page speed and optimize assets.');
     }
 
+    if (!technicalAudit.napAudit.hasNAP) {
+    recommendations.push(
+        'Add complete NAP details including business name, address, and phone number.'
+    );
+}
+
     return recommendations;
 }
 
@@ -589,6 +905,7 @@ async function getTechnicalSeoData(url, scores) {
 
     const imageAudit = await getImageAudit($, url);
     const schemaAudit = getSchemaAudit($);
+    const napAudit = getNAPAudit($);
     const technicalAudit = {
         titleText,
         titleLength: getTextLength(titleText),
@@ -617,6 +934,7 @@ async function getTechnicalSeoData(url, scores) {
         ],
         imageAudit,
         schemaAudit,
+        napAudit,
         openGraph: {
             ogTitle: $('meta[property="og:title"]').length > 0,
             ogDescription: $('meta[property="og:description"]').length > 0,
