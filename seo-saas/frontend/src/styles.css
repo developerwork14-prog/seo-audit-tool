@@ -417,6 +417,7 @@ th {
 td {
     color: var(--text);
     word-break: break-word;
+    white-space: pre-line;
 }
 
 tr:hover td {

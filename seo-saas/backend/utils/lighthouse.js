@@ -690,6 +690,204 @@ async function getImageAudit($, pageUrl) {
         brokenImageUrls: brokenImageUrls.slice(0, 50)
     };
 }
+async function fetchTextFile(url) {
+    try {
+        const response = await axios.get(url, {
+            timeout: 8000,
+            maxContentLength: 1024 * 1024,
+            responseType: 'text',
+            transformResponse: [(data) => data],
+            headers: {
+                'User-Agent': 'Mozilla/5.0 SEO Audit SaaS'
+            },
+            validateStatus: () => true
+        });
+
+        if (response.status >= 400) {
+            return {
+                url,
+                exists: false,
+                status: response.status,
+                content: '',
+                contentLength: 0
+            };
+        }
+
+        const content =
+            typeof response.data === 'string'
+                ? response.data
+                : JSON.stringify(response.data || '');
+
+        return {
+            url,
+            exists: true,
+            status: response.status,
+            content,
+            contentLength: content.length
+        };
+    } catch (error) {
+        return {
+            url,
+            exists: false,
+            status: 'error',
+            content: '',
+            contentLength: 0,
+            error: error.message
+        };
+    }
+}
+
+function getOriginFileUrl(pageUrl, filename) {
+    const parsed = new URL(pageUrl);
+
+    return `${parsed.origin}/${filename}`;
+}
+
+function summarizeTextFile(file) {
+    const content = file.content || '';
+    const lines = content
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+
+    return {
+        url: file.url,
+        exists: file.exists,
+        status: file.status,
+        contentLength: file.contentLength || 0,
+        lineCount: lines.length,
+        preview: content.slice(0, 4000),
+        error: file.error || ''
+    };
+}
+
+function parseRobotsTxt(file) {
+    const summary = summarizeTextFile(file);
+    const lines = (file.content || '')
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line && !line.startsWith('#'));
+
+    const directives = lines
+        .map((line) => {
+            const separatorIndex = line.indexOf(':');
+
+            if (separatorIndex === -1) {
+                return null;
+            }
+
+            return {
+                name: line.slice(0, separatorIndex).trim().toLowerCase(),
+                value: line.slice(separatorIndex + 1).trim()
+            };
+        })
+        .filter(Boolean);
+
+    const sitemapUrls = directives
+        .filter((directive) => directive.name === 'sitemap')
+        .map((directive) => directive.value)
+        .filter(Boolean);
+
+    return {
+        ...summary,
+        userAgents: [
+            ...new Set(
+                directives
+                    .filter((directive) => directive.name === 'user-agent')
+                    .map((directive) => directive.value)
+                    .filter(Boolean)
+            )
+        ],
+        disallowCount: directives.filter(
+            (directive) => directive.name === 'disallow'
+        ).length,
+        allowCount: directives.filter(
+            (directive) => directive.name === 'allow'
+        ).length,
+        sitemapUrls
+    };
+}
+
+function parseLlmsTxt(file) {
+    const summary = summarizeTextFile(file);
+    const content = file.content || '';
+
+    return {
+        ...summary,
+        headings: (content.match(/^#{1,6}\s+.+$/gm) || [])
+            .map((heading) => heading.replace(/^#{1,6}\s+/, '').trim())
+            .slice(0, 20),
+        links: (content.match(/\[[^\]]+\]\([^)]+\)/g) || []).slice(0, 50)
+    };
+}
+
+function parseSitemapXml(file) {
+    const summary = summarizeTextFile(file);
+
+    if (!file.exists || !file.content) {
+        return {
+            ...summary,
+            urlCount: 0,
+            sitemapCount: 0,
+            sampleUrls: []
+        };
+    }
+
+    try {
+        const $ = cheerio.load(file.content, {
+            xmlMode: true
+        });
+        const urls = $('url > loc')
+            .map((index, element) => $(element).text().trim())
+            .get()
+            .filter(Boolean);
+        const sitemapUrls = $('sitemap > loc')
+            .map((index, element) => $(element).text().trim())
+            .get()
+            .filter(Boolean);
+
+        return {
+            ...summary,
+            urlCount: urls.length,
+            sitemapCount: sitemapUrls.length,
+            sampleUrls: urls.slice(0, 20),
+            sitemapUrls: sitemapUrls.slice(0, 20),
+            parseError: ''
+        };
+    } catch (error) {
+        return {
+            ...summary,
+            urlCount: 0,
+            sitemapCount: 0,
+            sampleUrls: [],
+            sitemapUrls: [],
+            parseError: error.message
+        };
+    }
+}
+
+async function getSiteFileAudit(pageUrl) {
+    const [robotsFile, llmsFile, sitemapFile] = await Promise.all([
+        fetchTextFile(getOriginFileUrl(pageUrl, 'robots.txt')),
+        fetchTextFile(getOriginFileUrl(pageUrl, 'llms.txt')),
+        fetchTextFile(getOriginFileUrl(pageUrl, 'sitemap.xml'))
+    ]);
+
+    const robotsTxt = parseRobotsTxt(robotsFile);
+    const llmsTxt = parseLlmsTxt(llmsFile);
+    const sitemapXml = parseSitemapXml(sitemapFile);
+
+    return {
+        robotsTxt,
+        llmsTxt,
+        sitemapXml,
+        hasRobotsTxt: robotsTxt.exists,
+        hasLlmsTxt: llmsTxt.exists,
+        hasSitemapXml: sitemapXml.exists,
+        robotsSitemapCount: robotsTxt.sitemapUrls.length,
+        sitemapUrlCount: sitemapXml.urlCount
+    };
+}
 function getInternalLinkAudit($, pageUrl) {
 
     const links = [];
@@ -1086,6 +1284,19 @@ function getPageIssues(technicalAudit, scores) {
     if (!technicalAudit.napAudit.hasNAP) {
         issues.push('NAP information missing');
     }
+
+    if (!technicalAudit.siteFileAudit?.hasRobotsTxt) {
+        issues.push('robots.txt missing');
+    }
+
+    if (!technicalAudit.siteFileAudit?.hasSitemapXml) {
+        issues.push('sitemap.xml missing');
+    }
+
+    if (!technicalAudit.siteFileAudit?.hasLlmsTxt) {
+        issues.push('llms.txt missing');
+    }
+
     if (
     technicalAudit.internalLinkAudit?.issues?.length > 0
 ) {
@@ -1178,6 +1389,18 @@ if (
     );
 }
 
+if (!technicalAudit.siteFileAudit?.hasRobotsTxt) {
+    recommendations.push('Add a robots.txt file at the domain root.');
+}
+
+if (!technicalAudit.siteFileAudit?.hasSitemapXml) {
+    recommendations.push('Add a sitemap.xml file at the domain root.');
+}
+
+if (!technicalAudit.siteFileAudit?.hasLlmsTxt) {
+    recommendations.push('Add an llms.txt file at the domain root for AI crawler guidance.');
+}
+
     return recommendations;
 }
 
@@ -1242,6 +1465,7 @@ async function getTechnicalSeoData(url, scores) {
     const schemaAudit = getSchemaAudit($);
     const napAudit = getNAPAudit($);
     const internalLinkAudit = getInternalLinkAudit($, url);
+    const siteFileAudit = await getSiteFileAudit(url);
     const technicalAudit = {
         titleText,
         titleLength: getTextLength(titleText),
@@ -1272,6 +1496,7 @@ async function getTechnicalSeoData(url, scores) {
         schemaAudit,
         napAudit,
         internalLinkAudit,
+        siteFileAudit,
         openGraph: {
             ogTitle: $('meta[property="og:title"]').length > 0,
             ogDescription: $('meta[property="og:description"]').length > 0,

@@ -7,6 +7,7 @@ const tabs = [
     'Meta',
     'Headings',
     'Schema',
+    'Site Files',
     'Images',
     'Links',
     'Internal Links',
@@ -105,8 +106,35 @@ function getIssues(technical, audit) {
         issues.push('Poor performance score');
     }
 
-    if (!technical.napAudit?.hasNAP) {
+    if (
+        !technical.napAudit?.hasNAP &&
+        !issues.includes('NAP information missing')
+    ) {
         issues.push('NAP information missing');
+    }
+
+    if (
+        technical.siteFileAudit &&
+        !technical.siteFileAudit.hasRobotsTxt &&
+        !issues.includes('robots.txt missing')
+    ) {
+        issues.push('robots.txt missing');
+    }
+
+    if (
+        technical.siteFileAudit &&
+        !technical.siteFileAudit.hasSitemapXml &&
+        !issues.includes('sitemap.xml missing')
+    ) {
+        issues.push('sitemap.xml missing');
+    }
+
+    if (
+        technical.siteFileAudit &&
+        !technical.siteFileAudit.hasLlmsTxt &&
+        !issues.includes('llms.txt missing')
+    ) {
+        issues.push('llms.txt missing');
     }
 
     return issues;
@@ -118,7 +146,9 @@ function getIssuePriority(issue) {
         issue.includes('Missing H1') ||
         issue.includes('Title Missing') ||
         issue.includes('Poor performance') ||
-        issue.includes('NAP')
+        issue.includes('NAP') ||
+        issue.includes('robots.txt') ||
+        issue.includes('sitemap.xml')
     ) {
         return 'High';
     }
@@ -182,6 +212,18 @@ function getIssueTask(issue) {
         return 'Add business name, address, phone number, and email consistently across the page.';
     }
 
+    if (issue.includes('robots.txt')) {
+        return 'Create a robots.txt file at the domain root and include sitemap directives.';
+    }
+
+    if (issue.includes('sitemap.xml')) {
+        return 'Create a sitemap.xml file at the domain root with indexable page URLs.';
+    }
+
+    if (issue.includes('llms.txt')) {
+        return 'Create an llms.txt file at the domain root for AI crawler guidance.';
+    }
+
     return 'Review and fix this SEO issue.';
 }
 
@@ -238,6 +280,39 @@ function getImageRows(audit) {
     return rows;
 }
 
+function getFilenameFromUrl(url) {
+    try {
+        const parsed = new URL(url);
+        const pathname = parsed.pathname.replace(/\/$/, '');
+
+        return pathname.split('/').pop() || url;
+    } catch (error) {
+        return url;
+    }
+}
+
+function getChildSitemapPreview(sitemapXml) {
+    const sitemapUrls = sitemapXml?.sitemapUrls || [];
+
+    if (!sitemapUrls.length) {
+        return sitemapXml?.preview || '';
+    }
+
+    const visibleSitemaps = sitemapUrls
+        .slice(0, 4)
+        .map(getFilenameFromUrl);
+    const hiddenCount = Math.max(
+        (sitemapXml?.sitemapCount || sitemapUrls.length) -
+            visibleSitemaps.length,
+        0
+    );
+
+    return [
+        ...visibleSitemaps,
+        ...(hiddenCount > 0 ? [`+${hiddenCount} more`] : [])
+    ].join('\n');
+}
+
 function csvEscape(value) {
     const text = String(value ?? '');
     return /[",\n]/.test(text)
@@ -264,6 +339,10 @@ function downloadCsv(filename, rows) {
 function buildRows(tab, audit) {
     const technical = getTechnicalAudit(audit);
     const issues = getIssues(technical, audit);
+    const sitemapType =
+        (technical.siteFileAudit?.sitemapXml?.sitemapCount || 0) > 0
+            ? 'Sitemap Index'
+            : 'URL Sitemap';
 
     const rows = {
         Overview: [
@@ -390,6 +469,63 @@ function buildRows(tab, audit) {
             ]
         ],
 
+        'Site Files': [
+            [
+                'File',
+                'URL',
+                'Found',
+                'Status',
+                'Size',
+                'Lines',
+                'Details',
+                'Preview'
+            ],
+            [
+                'robots.txt',
+                technical.siteFileAudit?.robotsTxt?.url || '',
+                yesNo(technical.siteFileAudit?.robotsTxt?.exists),
+                technical.siteFileAudit?.robotsTxt?.status || '',
+                technical.siteFileAudit?.robotsTxt?.contentLength || 0,
+                technical.siteFileAudit?.robotsTxt?.lineCount || 0,
+                [
+                    `${technical.siteFileAudit?.robotsTxt?.disallowCount || 0} disallow rules`,
+                    `${technical.siteFileAudit?.robotsTxt?.allowCount || 0} allow rules`,
+                    `${technical.siteFileAudit?.robotsTxt?.sitemapUrls?.length || 0} sitemap directives`
+                ].join('; '),
+                technical.siteFileAudit?.robotsTxt?.preview || ''
+            ],
+            [
+                'llms.txt',
+                technical.siteFileAudit?.llmsTxt?.url || '',
+                yesNo(technical.siteFileAudit?.llmsTxt?.exists),
+                technical.siteFileAudit?.llmsTxt?.status || '',
+                technical.siteFileAudit?.llmsTxt?.contentLength || 0,
+                technical.siteFileAudit?.llmsTxt?.lineCount || 0,
+                [
+                    `${technical.siteFileAudit?.llmsTxt?.headings?.length || 0} headings`,
+                    `${technical.siteFileAudit?.llmsTxt?.links?.length || 0} links`
+                ].join('; '),
+                technical.siteFileAudit?.llmsTxt?.preview || ''
+            ],
+            [
+                'sitemap.xml',
+                technical.siteFileAudit?.sitemapXml?.url || '',
+                yesNo(technical.siteFileAudit?.sitemapXml?.exists),
+                technical.siteFileAudit?.sitemapXml?.status || '',
+                technical.siteFileAudit?.sitemapXml?.contentLength || 0,
+                technical.siteFileAudit?.sitemapXml?.lineCount || 0,
+                [
+                    sitemapType,
+                    `${technical.siteFileAudit?.sitemapXml?.urlCount || 0} URLs`,
+                    `${technical.siteFileAudit?.sitemapXml?.sitemapCount || 0} child sitemaps`,
+                    technical.siteFileAudit?.sitemapXml?.parseError
+                        ? `Parse error: ${technical.siteFileAudit.sitemapXml.parseError}`
+                        : ''
+                ].filter(Boolean).join('; '),
+                getChildSitemapPreview(technical.siteFileAudit?.sitemapXml)
+            ]
+        ],
+
         Images: [
             ['Page URL', 'Issue Type', 'Image URL', 'Status'],
             ...getImageRows(audit)
@@ -480,6 +616,18 @@ function TabContent({ tab, audit }) {
                 <Metric
                     label="NAP Found"
                     value={technical.napAudit?.hasNAP ? 'Yes' : 'No'}
+                />
+                <Metric
+                    label="robots.txt"
+                    value={technical.siteFileAudit?.hasRobotsTxt ? 'Yes' : 'No'}
+                />
+                <Metric
+                    label="llms.txt"
+                    value={technical.siteFileAudit?.hasLlmsTxt ? 'Yes' : 'No'}
+                />
+                <Metric
+                    label="sitemap.xml"
+                    value={technical.siteFileAudit?.hasSitemapXml ? 'Yes' : 'No'}
                 />
             </div>
         );
