@@ -888,6 +888,69 @@ async function getSiteFileAudit(pageUrl) {
         sitemapUrlCount: sitemapXml.urlCount
     };
 }
+
+async function checkProtocolUrl(url) {
+    try {
+        const response = await axios.get(url, {
+            timeout: 10000,
+            maxRedirects: 5,
+            responseType: 'stream',
+            headers: {
+                'User-Agent': 'Mozilla/5.0 SEO Audit SaaS'
+            },
+            validateStatus: () => true
+        });
+        const finalUrl = response.request?.res?.responseUrl || url;
+
+        if (response.data?.destroy) {
+            response.data.destroy();
+        }
+
+        return {
+            url,
+            reachable: response.status >= 200 && response.status < 400,
+            status: response.status,
+            finalUrl,
+            finalProtocol: new URL(finalUrl).protocol.replace(':', ''),
+            redirected: finalUrl.replace(/\/$/, '') !== url.replace(/\/$/, '')
+        };
+    } catch (error) {
+        return {
+            url,
+            reachable: false,
+            status: 'error',
+            finalUrl: '',
+            finalProtocol: '',
+            redirected: false,
+            error: error.message
+        };
+    }
+}
+
+async function getProtocolAudit(pageUrl) {
+    const parsed = new URL(pageUrl);
+    const httpUrl = `http://${parsed.host}/`;
+    const httpsUrl = `https://${parsed.host}/`;
+    const [http, https] = await Promise.all([
+        checkProtocolUrl(httpUrl),
+        checkProtocolUrl(httpsUrl)
+    ]);
+    const requestedProtocol = parsed.protocol.replace(':', '');
+    const redirectsHttpToHttps = http.finalProtocol === 'https';
+    const servesHttpWithoutRedirect =
+        http.reachable && http.finalProtocol === 'http';
+
+    return {
+        requestedProtocol,
+        isHttps: requestedProtocol === 'https',
+        http,
+        https,
+        hasHttps: https.reachable,
+        httpReachable: http.reachable,
+        redirectsHttpToHttps,
+        servesHttpWithoutRedirect
+    };
+}
 function getInternalLinkAudit($, pageUrl) {
 
     const links = [];
@@ -1297,6 +1360,26 @@ function getPageIssues(technicalAudit, scores) {
         issues.push('llms.txt missing');
     }
 
+    if (!technicalAudit.protocolAudit?.isHttps) {
+        issues.push('Page is not served over HTTPS');
+    }
+
+    if (!technicalAudit.protocolAudit?.hasHttps) {
+        issues.push('HTTPS version is not reachable');
+    }
+
+    if (technicalAudit.protocolAudit?.servesHttpWithoutRedirect) {
+        issues.push('HTTP version does not redirect to HTTPS');
+    }
+
+    if (
+        technicalAudit.canonicalUrl &&
+        technicalAudit.protocolAudit?.isHttps &&
+        technicalAudit.canonicalUrl.toLowerCase().startsWith('http://')
+    ) {
+        issues.push('Canonical URL uses HTTP');
+    }
+
     if (
     technicalAudit.internalLinkAudit?.issues?.length > 0
 ) {
@@ -1401,6 +1484,26 @@ if (!technicalAudit.siteFileAudit?.hasLlmsTxt) {
     recommendations.push('Add an llms.txt file at the domain root for AI crawler guidance.');
 }
 
+if (!technicalAudit.protocolAudit?.isHttps) {
+    recommendations.push('Serve the audited page over HTTPS.');
+}
+
+if (!technicalAudit.protocolAudit?.hasHttps) {
+    recommendations.push('Make sure the HTTPS version of the site is reachable.');
+}
+
+if (technicalAudit.protocolAudit?.servesHttpWithoutRedirect) {
+    recommendations.push('Redirect all HTTP traffic to the HTTPS version.');
+}
+
+if (
+    technicalAudit.canonicalUrl &&
+    technicalAudit.protocolAudit?.isHttps &&
+    technicalAudit.canonicalUrl.toLowerCase().startsWith('http://')
+) {
+    recommendations.push('Update the canonical URL to use HTTPS.');
+}
+
     return recommendations;
 }
 
@@ -1466,6 +1569,7 @@ async function getTechnicalSeoData(url, scores) {
     const napAudit = getNAPAudit($);
     const internalLinkAudit = getInternalLinkAudit($, url);
     const siteFileAudit = await getSiteFileAudit(url);
+    const protocolAudit = await getProtocolAudit(url);
     const technicalAudit = {
         titleText,
         titleLength: getTextLength(titleText),
@@ -1497,6 +1601,7 @@ async function getTechnicalSeoData(url, scores) {
         napAudit,
         internalLinkAudit,
         siteFileAudit,
+        protocolAudit,
         openGraph: {
             ogTitle: $('meta[property="og:title"]').length > 0,
             ogDescription: $('meta[property="og:description"]').length > 0,

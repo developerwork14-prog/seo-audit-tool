@@ -5,6 +5,7 @@ const tabs = [
     'Overview',
     'Pages',
     'Meta',
+    'HTTPS',
     'Headings',
     'Schema',
     'Site Files',
@@ -137,6 +138,37 @@ function getIssues(technical, audit) {
         issues.push('llms.txt missing');
     }
 
+    if (
+        technical.protocolAudit &&
+        !technical.protocolAudit.isHttps &&
+        !issues.includes('Page is not served over HTTPS')
+    ) {
+        issues.push('Page is not served over HTTPS');
+    }
+
+    if (
+        technical.protocolAudit &&
+        !technical.protocolAudit.hasHttps &&
+        !issues.includes('HTTPS version is not reachable')
+    ) {
+        issues.push('HTTPS version is not reachable');
+    }
+
+    if (
+        technical.protocolAudit?.servesHttpWithoutRedirect &&
+        !issues.includes('HTTP version does not redirect to HTTPS')
+    ) {
+        issues.push('HTTP version does not redirect to HTTPS');
+    }
+
+    if (
+        technical.canonicalUrl?.toLowerCase().startsWith('http://') &&
+        technical.protocolAudit?.isHttps &&
+        !issues.includes('Canonical URL uses HTTP')
+    ) {
+        issues.push('Canonical URL uses HTTP');
+    }
+
     return issues;
 }
 
@@ -148,7 +180,9 @@ function getIssuePriority(issue) {
         issue.includes('Poor performance') ||
         issue.includes('NAP') ||
         issue.includes('robots.txt') ||
-        issue.includes('sitemap.xml')
+        issue.includes('sitemap.xml') ||
+        issue.includes('HTTPS') ||
+        issue.includes('HTTP')
     ) {
         return 'High';
     }
@@ -222,6 +256,22 @@ function getIssueTask(issue) {
 
     if (issue.includes('llms.txt')) {
         return 'Create an llms.txt file at the domain root for AI crawler guidance.';
+    }
+
+    if (issue.includes('not served over HTTPS')) {
+        return 'Serve the audited page over HTTPS.';
+    }
+
+    if (issue.includes('HTTPS version is not reachable')) {
+        return 'Fix SSL, hosting, or redirect configuration so HTTPS responds successfully.';
+    }
+
+    if (issue.includes('HTTP version does not redirect')) {
+        return 'Add a 301 redirect from HTTP to HTTPS.';
+    }
+
+    if (issue.includes('Canonical URL uses HTTP')) {
+        return 'Update the canonical URL to use HTTPS.';
     }
 
     return 'Review and fix this SEO issue.';
@@ -313,6 +363,24 @@ function getChildSitemapPreview(sitemapXml) {
     ].join('\n');
 }
 
+function getProtocolResult(check, protocolAudit) {
+    if (!check?.reachable) {
+        return check?.error ? `Not reachable: ${check.error}` : 'Not reachable';
+    }
+
+    if (check.url?.startsWith('http://')) {
+        return protocolAudit?.redirectsHttpToHttps
+            ? 'Redirects to HTTPS'
+            : 'Serves HTTP';
+    }
+
+    return 'HTTPS reachable';
+}
+
+function getCurrentProtocolCheck(protocolAudit) {
+    return protocolAudit?.isHttps ? protocolAudit.https : protocolAudit?.http;
+}
+
 function csvEscape(value) {
     const text = String(value ?? '');
     return /[",\n]/.test(text)
@@ -343,6 +411,9 @@ function buildRows(tab, audit) {
         (technical.siteFileAudit?.sitemapXml?.sitemapCount || 0) > 0
             ? 'Sitemap Index'
             : 'URL Sitemap';
+    const currentProtocolCheck = getCurrentProtocolCheck(
+        technical.protocolAudit
+    );
 
     const rows = {
         Overview: [
@@ -357,6 +428,18 @@ function buildRows(tab, audit) {
             ['SEO', audit.seoScore],
             ['Accessibility', audit.accessibilityScore],
             ['Best Practices', audit.bestPracticesScore],
+            [
+                'HTTPS',
+                technical.protocolAudit
+                    ? yesNo(technical.protocolAudit.isHttps)
+                    : 'N/A'
+            ],
+            [
+                'HTTP redirects to HTTPS',
+                technical.protocolAudit
+                    ? yesNo(technical.protocolAudit.redirectsHttpToHttps)
+                    : 'N/A'
+            ],
             [
                 'NAP Found',
                 technical.napAudit?.hasNAP ? 'Yes' : 'No'
@@ -414,6 +497,63 @@ function buildRows(tab, audit) {
                 yesNo(technical.canonicalMatches),
                 technical.robotsMeta || '',
                 technical.indexability || ''
+            ]
+        ],
+
+        HTTPS: [
+            [
+                'Check',
+                'URL',
+                'Reachable',
+                'Status',
+                'Final URL',
+                'Result'
+            ],
+            [
+                'Current page',
+                audit.url,
+                technical.protocolAudit
+                    ? yesNo(technical.protocolAudit.isHttps)
+                    : 'N/A',
+                currentProtocolCheck?.status || '',
+                currentProtocolCheck?.finalUrl || audit.url,
+                technical.protocolAudit
+                    ? technical.protocolAudit.isHttps ? 'HTTPS' : 'HTTP'
+                    : 'N/A'
+            ],
+            [
+                'HTTP version',
+                technical.protocolAudit?.http?.url || '',
+                yesNo(technical.protocolAudit?.http?.reachable),
+                technical.protocolAudit?.http?.status || '',
+                technical.protocolAudit?.http?.finalUrl || '',
+                getProtocolResult(
+                    technical.protocolAudit?.http,
+                    technical.protocolAudit
+                )
+            ],
+            [
+                'HTTPS version',
+                technical.protocolAudit?.https?.url || '',
+                yesNo(technical.protocolAudit?.https?.reachable),
+                technical.protocolAudit?.https?.status || '',
+                technical.protocolAudit?.https?.finalUrl || '',
+                getProtocolResult(
+                    technical.protocolAudit?.https,
+                    technical.protocolAudit
+                )
+            ],
+            [
+                'Canonical protocol',
+                technical.canonicalUrl || '',
+                technical.canonicalUrl ? 'Yes' : 'No',
+                '',
+                '',
+                technical.canonicalUrl?.toLowerCase().startsWith('http://')
+                    ? 'Canonical uses HTTP'
+                    : technical.canonicalUrl
+                        ? 'Canonical uses HTTPS or relative URL'
+                        : 'Missing canonical'
             ]
         ],
 
@@ -613,6 +753,24 @@ function TabContent({ tab, audit }) {
                 <Metric label="Partial audits" value={0} />
                 <Metric label="Failed pages" value={0} />
                 <Metric label="Open issues" value={issues.length} />
+                <Metric
+                    label="HTTPS"
+                    value={
+                        technical.protocolAudit
+                            ? yesNo(technical.protocolAudit.isHttps)
+                            : 'N/A'
+                    }
+                />
+                <Metric
+                    label="HTTP Redirect"
+                    value={
+                        technical.protocolAudit
+                            ? yesNo(
+                                technical.protocolAudit.redirectsHttpToHttps
+                            )
+                            : 'N/A'
+                    }
+                />
                 <Metric
                     label="NAP Found"
                     value={technical.napAudit?.hasNAP ? 'Yes' : 'No'}
