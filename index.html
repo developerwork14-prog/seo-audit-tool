@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SEO Audit Tool</title>
+
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+    <div class="app-shell">
+
+        <header class="app-header">
+            <div>
+                <h1>SEO Audit Console</h1>
+                <span>On-page, technical, and crawl export workspace</span>
+            </div>
+
+            <div class="header-status">
+                <span>Local Audit</span>
+            </div>
+        </header>
+
+        <section class="audit-panel">
+
+            <div class="field-group url-field">
+                <label for="urlInput">URL</label>
+                <input
+                    type="text"
+                    id="urlInput"
+                    placeholder="https://example.com/"
+                >
+            </div>
+
+            <div class="field-group">
+                <span class="field-label">Scope</span>
+                <div class="scope-toggle" aria-label="Audit scope">
+                    <label>
+                        <input
+                            type="radio"
+                            name="auditScope"
+                            value="single"
+                            checked
+                        >
+                        <span>Single</span>
+                    </label>
+
+                    <label>
+                        <input
+                            type="radio"
+                            name="auditScope"
+                            value="site"
+                        >
+                        <span>Site</span>
+                    </label>
+                </div>
+            </div>
+
+            <label class="field-group page-limit">
+                <span>Pages</span>
+                <input
+                    type="number"
+                    id="maxPagesInput"
+                    min="1"
+                    max="25"
+                    value="10"
+                >
+            </label>
+
+            <div class="command-group">
+                <button class="primary-action" onclick="runAudit()">
+                    Run Audit
+                </button>
+
+                <button class="secondary-action" onclick="downloadReport()">
+                    PDF
+                </button>
+
+                <button class="secondary-action" onclick="exportAuditCsv('all')">
+                    CSV
+                </button>
+            </div>
+
+        </section>
+
+        <main id="results"></main>
+
+    </div>
+
+    <script src="script.js"></script>
+
+</body>
+
+</html>
