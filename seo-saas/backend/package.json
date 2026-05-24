@@ -1,0 +1,22 @@
+{
+  "name": "seo-audit-saas-backend",
+  "version": "1.0.0",
+  "description": "Backend API for SEO Audit SaaS",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.16.1",
+    "bcryptjs": "^3.0.2",
+    "cheerio": "^1.2.0",
+    "chrome-launcher": "^1.2.1",
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.2",
+    "lighthouse": "^13.3.0",
+    "mongoose": "^8.19.4"
+  }
+}

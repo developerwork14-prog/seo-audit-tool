@@ -1,0 +1,697 @@
+const axios = require('axios');
+const cheerio = require('cheerio');
+const chromeLauncher = require('chrome-launcher');
+const lighthouse = require('lighthouse').default;
+
+function normalizeUrl(url) {
+    if (!url || typeof url !== 'string') {
+        throw new Error('URL is required');
+    }
+
+    const withProtocol = /^https?:\/\//i.test(url)
+        ? url
+        : `https://${url}`;
+
+    const parsed = new URL(withProtocol);
+
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+        throw new Error('Only HTTP and HTTPS URLs are supported');
+    }
+
+    return parsed.href;
+}
+
+function safeScore(score) {
+    if (score === null || score === undefined) {
+        return 0;
+    }
+
+    return Math.round(score * 100);
+}
+
+function getTextLength(text) {
+    return (text || '').trim().length;
+}
+
+function getLengthStatus(length, min, max) {
+    if (length === 0) {
+        return 'Missing';
+    }
+
+    if (length < min) {
+        return 'Too short';
+    }
+
+    if (length > max) {
+        return 'Too long';
+    }
+
+    return 'Good';
+}
+
+function resolveAssetUrl(src, pageUrl) {
+    if (!src) {
+        return '';
+    }
+
+    if (src.startsWith('data:') || src.startsWith('blob:')) {
+        return src;
+    }
+
+    try {
+        return new URL(src, pageUrl).href;
+    } catch (error) {
+        return src;
+    }
+}
+
+function toArray(value) {
+    if (value === undefined || value === null) {
+        return [];
+    }
+
+    return Array.isArray(value) ? value : [value];
+}
+
+function flattenSchemaItems(value) {
+    const items = [];
+
+    toArray(value).forEach((entry) => {
+        if (!entry || typeof entry !== 'object') {
+            return;
+        }
+
+        items.push(entry);
+
+        toArray(entry['@graph']).forEach((graphItem) => {
+            if (graphItem && typeof graphItem === 'object') {
+                items.push(graphItem);
+            }
+        });
+    });
+
+    return items;
+}
+
+function getSchemaTypes(item) {
+    return toArray(item?.['@type'])
+        .flatMap((type) => String(type).split(/\s+/))
+        .map((type) => type.trim())
+        .filter(Boolean);
+}
+
+function hasSchemaProperty(item, property) {
+    const value = item?.[property];
+
+    if (value === undefined || value === null) {
+        return false;
+    }
+
+    if (typeof value === 'string') {
+        return value.trim().length > 0;
+    }
+
+    if (Array.isArray(value)) {
+        return value.length > 0;
+    }
+
+    if (typeof value === 'object') {
+        return Object.keys(value).length > 0;
+    }
+
+    return true;
+}
+
+function getSchemaRequirements(type) {
+    const rules = {
+        Organization: {
+            required: ['name', 'url'],
+            recommended: ['logo', 'sameAs']
+        },
+        LocalBusiness: {
+            required: ['name', 'address', 'telephone'],
+            recommended: ['url', 'openingHours', 'priceRange']
+        },
+        WebSite: {
+            required: ['name', 'url'],
+            recommended: ['potentialAction']
+        },
+        WebPage: {
+            required: ['name', 'url'],
+            recommended: ['description', 'breadcrumb']
+        },
+        Article: {
+            required: ['headline', 'datePublished', 'author'],
+            recommended: ['image', 'dateModified', 'publisher']
+        },
+        BlogPosting: {
+            required: ['headline', 'datePublished', 'author'],
+            recommended: ['image', 'dateModified', 'publisher']
+        },
+        Product: {
+            required: ['name', 'image', 'description'],
+            recommended: ['offers', 'aggregateRating', 'brand']
+        },
+        FAQPage: {
+            required: ['mainEntity'],
+            recommended: []
+        },
+        BreadcrumbList: {
+            required: ['itemListElement'],
+            recommended: []
+        },
+        Review: {
+            required: ['itemReviewed', 'reviewRating', 'author'],
+            recommended: ['datePublished']
+        }
+    };
+
+    return rules[type] || {
+        required: [],
+        recommended: []
+    };
+}
+
+function getSchemaAudit($) {
+    const invalidJsonLd = [];
+    const schemaItems = [];
+
+    $('script[type="application/ld+json"]').each((index, element) => {
+        const rawJson = $(element).contents().text().trim();
+
+        if (!rawJson) {
+            invalidJsonLd.push({
+                block: index + 1,
+                error: 'Empty JSON-LD block'
+            });
+            return;
+        }
+
+        try {
+            schemaItems.push(...flattenSchemaItems(JSON.parse(rawJson)));
+        } catch (error) {
+            invalidJsonLd.push({
+                block: index + 1,
+                error: error.message
+            });
+        }
+    });
+
+    const microdataItems = $('[itemscope]').length;
+    const rdfaItems = $('[typeof]').length;
+    const typeCounts = {};
+    const missingRequired = [];
+    const missingRecommended = [];
+
+    schemaItems.forEach((item) => {
+        const types = getSchemaTypes(item);
+
+        if (types.length === 0) {
+            missingRequired.push({
+                type: 'Unknown',
+                property: '@type',
+                severity: 'Required'
+            });
+        }
+
+        types.forEach((type) => {
+            typeCounts[type] = (typeCounts[type] || 0) + 1;
+            const requirements = getSchemaRequirements(type);
+
+            requirements.required.forEach((property) => {
+                if (!hasSchemaProperty(item, property)) {
+                    missingRequired.push({
+                        type,
+                        property,
+                        severity: 'Required'
+                    });
+                }
+            });
+
+            requirements.recommended.forEach((property) => {
+                if (!hasSchemaProperty(item, property)) {
+                    missingRecommended.push({
+                        type,
+                        property,
+                        severity: 'Recommended'
+                    });
+                }
+            });
+        });
+    });
+
+    const types = Object.keys(typeCounts).sort();
+    const hasStructuredData =
+        schemaItems.length > 0 || microdataItems > 0 || rdfaItems > 0;
+
+    const status = !hasStructuredData
+        ? 'Missing'
+        : invalidJsonLd.length > 0
+            ? 'Invalid'
+            : missingRequired.length > 0
+                ? 'Needs required fields'
+                : missingRecommended.length > 0
+                    ? 'Needs recommended fields'
+                    : 'Good';
+
+    return {
+        hasStructuredData,
+        status,
+        jsonLdBlocks: $('script[type="application/ld+json"]').length,
+        validJsonLdBlocks:
+            $('script[type="application/ld+json"]').length -
+            invalidJsonLd.length,
+        invalidJsonLd: invalidJsonLd.length,
+        microdataItems,
+        rdfaItems,
+        schemaItems: schemaItems.length,
+        types,
+        typeCounts,
+        missingRequired,
+        missingRecommended
+    };
+}
+
+function getChromeFlags() {
+    return [
+        '--headless',
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-gpu',
+        '--disable-extensions',
+        '--disable-background-networking'
+    ];
+}
+
+async function checkImageUrl(imageUrl) {
+    if (
+        !imageUrl ||
+        imageUrl.startsWith('data:') ||
+        imageUrl.startsWith('blob:')
+    ) {
+        return null;
+    }
+
+    try {
+        const response = await axios.head(imageUrl, {
+            timeout: 6000,
+            maxRedirects: 5,
+            validateStatus: () => true,
+            headers: {
+                'User-Agent': 'Mozilla/5.0 SEO Audit SaaS'
+            }
+        });
+
+        if (response.status >= 400) {
+            return {
+                url: imageUrl,
+                status: response.status
+            };
+        }
+
+        return null;
+    } catch (error) {
+        return {
+            url: imageUrl,
+            status: error.response?.status || 'Request failed'
+        };
+    }
+}
+
+async function getImageAudit($, pageUrl) {
+    const images = $('img');
+    const missingAltImages = [];
+    const emptyAltImages = [];
+    const missingTitleImages = [];
+    const missingDimensionImages = [];
+    const imageUrls = [];
+
+    images.each((index, img) => {
+        const src =
+            $(img).attr('src') ||
+            $(img).attr('data-src') ||
+            $(img).attr('data-lazy-src') ||
+            '';
+        const resolvedUrl = resolveAssetUrl(src, pageUrl);
+        const alt = $(img).attr('alt');
+        const title = $(img).attr('title');
+        const width = $(img).attr('width');
+        const height = $(img).attr('height');
+
+        if (resolvedUrl) {
+            imageUrls.push(resolvedUrl);
+        }
+
+        if (alt === undefined) {
+            missingAltImages.push({ url: resolvedUrl, src });
+        }
+
+        if (alt !== undefined && alt.trim() === '') {
+            emptyAltImages.push({ url: resolvedUrl, src });
+        }
+
+        if (title === undefined || title.trim() === '') {
+            missingTitleImages.push({ url: resolvedUrl, src });
+        }
+
+        if (!width || !height) {
+            missingDimensionImages.push({ url: resolvedUrl, src });
+        }
+    });
+
+    const brokenImageUrls = [];
+    const uniqueImageUrls = [...new Set(imageUrls)].slice(0, 20);
+
+    for (const imageUrl of uniqueImageUrls) {
+        const brokenImage = await checkImageUrl(imageUrl);
+
+        if (brokenImage) {
+            brokenImageUrls.push(brokenImage);
+        }
+    }
+
+    return {
+        totalImages: images.length,
+        missingAlt: missingAltImages.length,
+        emptyAlt: emptyAltImages.length,
+        missingTitle: missingTitleImages.length,
+        missingDimensions: missingDimensionImages.length,
+        brokenImages: brokenImageUrls.length,
+        missingAltImages: missingAltImages.slice(0, 50),
+        emptyAltImages: emptyAltImages.slice(0, 50),
+        missingTitleImages: missingTitleImages.slice(0, 50),
+        missingDimensionImages: missingDimensionImages.slice(0, 50),
+        brokenImageUrls: brokenImageUrls.slice(0, 50)
+    };
+}
+
+function getPageIssues(technicalAudit, scores) {
+    const issues = [];
+
+    if (technicalAudit.indexability === 'Noindex') {
+        issues.push('Page is noindex');
+    }
+
+    if (technicalAudit.titleStatus !== 'Good') {
+        issues.push(`Title ${technicalAudit.titleStatus}`);
+    }
+
+    if (technicalAudit.metaDescriptionStatus !== 'Good') {
+        issues.push(`Meta description ${technicalAudit.metaDescriptionStatus}`);
+    }
+
+    if (!technicalAudit.canonicalUrl) {
+        issues.push('Missing canonical');
+    } else if (!technicalAudit.canonicalMatches) {
+        issues.push('Canonical does not match page URL');
+    }
+
+    if (technicalAudit.headings.h1 === 0) {
+        issues.push('Missing H1');
+    }
+
+    if (technicalAudit.headings.h1 > 1) {
+        issues.push('Multiple H1 tags');
+    }
+
+    if (technicalAudit.duplicateH1) {
+        issues.push('Duplicate H1 text');
+    }
+
+    if (technicalAudit.schemaAudit.status === 'Missing') {
+        issues.push('Missing schema markup');
+    }
+
+    if (technicalAudit.schemaAudit.invalidJsonLd > 0) {
+        issues.push('Invalid JSON-LD schema');
+    }
+
+    if (technicalAudit.schemaAudit.missingRequired.length > 0) {
+        issues.push('Schema missing required fields');
+    }
+
+    if (technicalAudit.wordCount < 300) {
+        issues.push('Thin content');
+    }
+
+    if (technicalAudit.imageAudit.missingAlt > 0) {
+        issues.push('Images missing ALT text');
+    }
+
+    if (technicalAudit.imageAudit.missingTitle > 0) {
+        issues.push('Images missing title text');
+    }
+
+    if (technicalAudit.imageAudit.missingDimensions > 0) {
+        issues.push('Images missing dimensions');
+    }
+
+    if (technicalAudit.imageAudit.brokenImages > 0) {
+        issues.push('Broken image URLs');
+    }
+
+    if (scores.performanceScore < 50) {
+        issues.push('Poor performance score');
+    }
+
+    return issues;
+}
+
+function getRecommendations(technicalAudit, scores) {
+    const recommendations = [];
+
+    if (technicalAudit.metaDescriptionStatus !== 'Good') {
+        recommendations.push(
+            `Fix meta description length. Current status: ${technicalAudit.metaDescriptionStatus}.`
+        );
+    }
+
+    if (technicalAudit.titleStatus !== 'Good') {
+        recommendations.push(
+            `Fix title length. Current status: ${technicalAudit.titleStatus}.`
+        );
+    }
+
+    if (!technicalAudit.canonicalUrl) {
+        recommendations.push('Add a self-referencing canonical URL.');
+    }
+
+    if (technicalAudit.wordCount < 300) {
+        recommendations.push('Add more useful body content. Word count is below 300.');
+    }
+
+    if (!technicalAudit.schemaAudit.hasStructuredData) {
+        recommendations.push('Add structured schema markup.');
+    }
+
+    if (technicalAudit.schemaAudit.invalidJsonLd > 0) {
+        recommendations.push('Fix invalid JSON-LD schema markup.');
+    }
+
+    if (technicalAudit.schemaAudit.missingRequired.length > 0) {
+        recommendations.push('Add required schema properties.');
+    }
+
+    if (technicalAudit.headings.h1 === 0) {
+        recommendations.push('Add one H1 heading.');
+    }
+
+    if (technicalAudit.headings.h1 > 1) {
+        recommendations.push('Use only one H1.');
+    }
+
+    if (technicalAudit.imageAudit.missingAlt > 0) {
+        recommendations.push(
+            `${technicalAudit.imageAudit.missingAlt} images missing ALT text.`
+        );
+    }
+
+    if (technicalAudit.imageAudit.missingTitle > 0) {
+        recommendations.push(
+            `${technicalAudit.imageAudit.missingTitle} images missing title text.`
+        );
+    }
+
+    if (technicalAudit.imageAudit.missingDimensions > 0) {
+        recommendations.push('Add image width and height attributes.');
+    }
+
+    if (technicalAudit.imageAudit.brokenImages > 0) {
+        recommendations.push(
+            `${technicalAudit.imageAudit.brokenImages} broken image URLs found.`
+        );
+    }
+
+    if (scores.performanceScore < 90) {
+        recommendations.push('Improve page speed and optimize assets.');
+    }
+
+    return recommendations;
+}
+
+async function getTechnicalSeoData(url, scores) {
+    const response = await axios.get(url, {
+        timeout: 15000,
+        headers: {
+            'User-Agent': 'Mozilla/5.0 SEO Audit SaaS'
+        }
+    });
+
+    const $ = cheerio.load(response.data);
+    const titleText = $('title').first().text().trim();
+    const metaDescription =
+        $('meta[name="description"]').first().attr('content') || '';
+    const canonicalUrl =
+        $('link[rel="canonical"]').first().attr('href') || '';
+    const robotsMeta =
+        $('meta[name="robots"]').first().attr('content') || '';
+    const bodyText = $('body').text().replace(/\s+/g, ' ').trim();
+    const words = bodyText ? bodyText.split(/\s+/) : [];
+    const h1Texts = $('h1')
+        .map((index, element) => $(element).text().replace(/\s+/g, ' ').trim())
+        .get()
+        .filter(Boolean);
+    const headings = {
+        h1: $('h1').length,
+        h2: $('h2').length,
+        h3: $('h3').length,
+        h4: $('h4').length,
+        h5: $('h5').length,
+        h6: $('h6').length
+    };
+    const links = $('a');
+    let internalLinks = 0;
+    let externalLinks = 0;
+
+    links.each((index, link) => {
+        const href = $(link).attr('href');
+
+        if (
+            !href ||
+            href.startsWith('#') ||
+            href.startsWith('javascript') ||
+            href.startsWith('mailto:')
+        ) {
+            return;
+        }
+
+        try {
+            const fullUrl = new URL(href, url).href;
+
+            if (new URL(fullUrl).hostname === new URL(url).hostname) {
+                internalLinks++;
+            } else {
+                externalLinks++;
+            }
+        } catch (error) {}
+    });
+
+    const imageAudit = await getImageAudit($, url);
+    const schemaAudit = getSchemaAudit($);
+    const technicalAudit = {
+        titleText,
+        titleLength: getTextLength(titleText),
+        titleStatus: getLengthStatus(getTextLength(titleText), 30, 60),
+        metaDescription,
+        metaDescriptionLength: getTextLength(metaDescription),
+        metaDescriptionStatus:
+            getLengthStatus(getTextLength(metaDescription), 120, 160),
+        canonicalUrl,
+        canonicalMatches:
+            canonicalUrl
+                ? canonicalUrl.replace(/\/$/, '') === url.replace(/\/$/, '')
+                : false,
+        robotsMeta,
+        indexability:
+            robotsMeta.toLowerCase().includes('noindex')
+                ? 'Noindex'
+                : 'Indexable',
+        wordCount: words.length,
+        h1Texts,
+        duplicateH1: new Set(h1Texts).size !== h1Texts.length,
+        headings,
+        headingIssues: [
+            ...(headings.h1 === 0 ? ['Missing H1'] : []),
+            ...(headings.h1 > 1 ? ['Multiple H1 tags'] : [])
+        ],
+        imageAudit,
+        schemaAudit,
+        openGraph: {
+            ogTitle: $('meta[property="og:title"]').length > 0,
+            ogDescription: $('meta[property="og:description"]').length > 0,
+            ogImage: $('meta[property="og:image"]').length > 0,
+            ogUrl: $('meta[property="og:url"]').length > 0
+        },
+        linkAudit: {
+            totalLinks: links.length,
+            internalLinks,
+            externalLinks,
+            brokenLinks: []
+        }
+    };
+
+    technicalAudit.issues = getPageIssues(technicalAudit, scores);
+    technicalAudit.recommendations = getRecommendations(technicalAudit, scores);
+
+    return technicalAudit;
+}
+
+async function runLighthouseAudit(inputUrl) {
+    const url = normalizeUrl(inputUrl);
+    let chrome;
+
+    try {
+        chrome = await chromeLauncher.launch({
+            chromeFlags: getChromeFlags()
+        });
+
+        const result = await lighthouse(url, {
+            port: chrome.port,
+            output: 'json',
+            logLevel: 'error',
+            onlyCategories: [
+                'performance',
+                'seo',
+                'accessibility',
+                'best-practices'
+            ]
+        });
+
+        const report = result.lhr;
+        const scores = {
+            performanceScore: safeScore(report.categories.performance?.score),
+            seoScore: safeScore(report.categories.seo?.score),
+            accessibilityScore: safeScore(
+                report.categories.accessibility?.score
+            ),
+            bestPracticesScore: safeScore(
+                report.categories['best-practices']?.score
+            )
+        };
+        const technicalAudit =
+            await getTechnicalSeoData(url, scores).catch((error) => ({
+                error: error.message
+            }));
+
+        return {
+            url,
+            ...scores,
+            fullReport: {
+                lighthouse: report,
+                technicalAudit
+            }
+        };
+    } finally {
+        if (chrome) {
+            try {
+                await chrome.kill();
+            } catch (error) {}
+        }
+    }
+}
+
+module.exports = {
+    normalizeUrl,
+    runLighthouseAudit
+};

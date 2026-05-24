@@ -1,0 +1,20 @@
+{
+  "name": "seo-audit-saas-frontend",
+  "version": "1.0.0",
+  "description": "React frontend for SEO Audit SaaS",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "axios": "^1.16.1",
+    "vite": "^5.4.11",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.28.0"
+  },
+  "devDependencies": {}
+}
