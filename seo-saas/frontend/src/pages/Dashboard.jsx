@@ -9,6 +9,7 @@ const tabs = [
     'Schema',
     'Images',
     'Links',
+    'Internal Links',
     'NAP',
     'Actions',
     'Failures'
@@ -410,6 +411,21 @@ function buildRows(tab, audit) {
                 technical.linkAudit?.brokenLinks?.length || 0
             ]
         ],
+        'Internal Links': [
+    [
+        'Page URL',
+        'Anchor Text',
+        'Target URL',
+        'Status'
+    ],
+
+    ...(technical.internalLinkAudit?.links || []).map((link) => [
+        link.pageUrl || audit.url,
+        link.anchorText || '',
+        link.targetUrl || '',
+        link.status || ''
+    ])
+],
 
         NAP: [
             [

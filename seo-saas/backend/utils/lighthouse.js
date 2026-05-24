@@ -310,8 +310,7 @@ const bodyText = $('body')
     |--------------------------------------------------------------------------
     */
 
-    const phoneRegex =
-    /(?:\+91[\s-]?)?[6-9]\d{9}/g;
+    const phoneRegex = /(?<!\d)(?:\+91[\s\-]?)?[6-9]\d{9}(?!\d)/g;
 
 const rawPhones =
     bodyText.match(phoneRegex) || [];
@@ -691,6 +690,295 @@ async function getImageAudit($, pageUrl) {
         brokenImageUrls: brokenImageUrls.slice(0, 50)
     };
 }
+function getInternalLinkAudit($, pageUrl) {
+
+    const links = [];
+    const issues = [];
+
+    $('a').each((index, element) => {
+
+        /*
+        |------------------------------------------------------------------
+        | HREF
+        |------------------------------------------------------------------
+        */
+
+        const href =
+            ($(element).attr('href') || '').trim();
+
+        if (
+            !href ||
+            href.startsWith('#') ||
+            href.startsWith('javascript:') ||
+            href.startsWith('mailto:') ||
+            href.startsWith('tel:')
+        ) {
+            return;
+        }
+
+        try {
+
+            const fullUrl =
+                new URL(href, pageUrl).href;
+
+            /*
+            |------------------------------------------------------------------
+            | INTERNAL LINKS ONLY
+            |------------------------------------------------------------------
+            */
+
+            const isInternal =
+                new URL(fullUrl).hostname ===
+                new URL(pageUrl).hostname;
+
+            if (!isInternal) {
+                return;
+            }
+
+            /*
+            |------------------------------------------------------------------
+            | ANCHOR TEXT
+            |------------------------------------------------------------------
+            */
+
+            let anchorText =
+                $(element)
+                    .text()
+                    .replace(/\s+/g, ' ')
+                    .trim();
+
+            /*
+            |------------------------------------------------------------------
+            | IMAGE ALT FALLBACK
+            |------------------------------------------------------------------
+            */
+
+            if (!anchorText) {
+
+                const imageAlt =
+                    $(element)
+                        .find('img')
+                        .first()
+                        .attr('alt');
+
+                if (imageAlt) {
+
+                    anchorText =
+                        imageAlt
+                            .replace(/\s+/g, ' ')
+                            .trim();
+
+                }
+
+            }
+
+            /*
+            |------------------------------------------------------------------
+            | ARIA LABEL FALLBACK
+            |------------------------------------------------------------------
+            */
+
+            if (!anchorText) {
+
+                const ariaLabel =
+                    $(element).attr('aria-label');
+
+                if (ariaLabel) {
+
+                    anchorText =
+                        ariaLabel
+                            .replace(/\s+/g, ' ')
+                            .trim();
+
+                }
+
+            }
+
+            /*
+            |------------------------------------------------------------------
+            | TITLE FALLBACK
+            |------------------------------------------------------------------
+            */
+
+            if (!anchorText) {
+
+                const title =
+                    $(element).attr('title');
+
+                if (title) {
+
+                    anchorText =
+                        title
+                            .replace(/\s+/g, ' ')
+                            .trim();
+
+                }
+
+            }
+
+            /*
+            |------------------------------------------------------------------
+            | STATUS
+            |------------------------------------------------------------------
+            */
+
+            let status = 'Good';
+
+            const lowerAnchor =
+                anchorText.toLowerCase();
+
+            const genericAnchors = [
+                'click here',
+                'read more',
+                'learn more',
+                'continue reading',
+                'view more',
+                'more',
+                'here',
+                'details'
+            ];
+
+            /*
+            |------------------------------------------------------------------
+            | MISSING ANCHOR
+            |------------------------------------------------------------------
+            */
+
+            if (!anchorText) {
+
+                status = 'Missing Anchor Text';
+
+                issues.push(
+                    `Internal link missing anchor text: ${fullUrl}`
+                );
+
+            }
+
+            /*
+            |------------------------------------------------------------------
+            | WEAK ANCHOR
+            |------------------------------------------------------------------
+            */
+
+            else if (anchorText.length < 3) {
+
+                status = 'Weak Anchor';
+
+                issues.push(
+                    `Weak anchor text: ${anchorText}`
+                );
+
+            }
+
+            /*
+            |------------------------------------------------------------------
+            | GENERIC ANCHOR
+            |------------------------------------------------------------------
+            */
+
+            else if (
+                genericAnchors.includes(lowerAnchor)
+            ) {
+
+                status = 'Generic Anchor';
+
+                issues.push(
+                    `Generic anchor text used: ${anchorText}`
+                );
+
+            }
+
+            /*
+            |------------------------------------------------------------------
+            | KEYWORD RICH
+            |------------------------------------------------------------------
+            */
+
+            else if (anchorText.length > 15) {
+
+                status = 'Keyword Rich';
+
+            }
+
+            /*
+            |------------------------------------------------------------------
+            | NOFOLLOW
+            |------------------------------------------------------------------
+            */
+
+            const rel =
+                ($(element).attr('rel') || '')
+                    .toLowerCase();
+
+            const isNoFollow =
+                rel.includes('nofollow');
+
+            /*
+            |------------------------------------------------------------------
+            | PUSH
+            |------------------------------------------------------------------
+            */
+
+            links.push({
+
+    pageUrl,
+
+    anchorText,
+
+    targetUrl: fullUrl,
+
+    status
+
+});
+
+        } catch (error) {
+
+            issues.push(
+                `Invalid internal link: ${href}`
+            );
+
+        }
+
+    });
+
+    /*
+    |----------------------------------------------------------------------
+    | REMOVE DUPLICATES
+    |----------------------------------------------------------------------
+    */
+
+    const uniqueLinks = [];
+
+    const seen = new Set();
+
+    links.forEach(link => {
+
+        const key =
+            `${link.targetUrl}-${link.anchorText}`;
+
+        if (!seen.has(key)) {
+
+            seen.add(key);
+
+            uniqueLinks.push(link);
+
+        }
+
+    });
+
+    return {
+
+        totalInternalLinks:
+            uniqueLinks.length,
+
+        issues,
+
+        links:
+            uniqueLinks.slice(0, 300)
+
+    };
+
+}
 
 function getPageIssues(technicalAudit, scores) {
     const issues = [];
@@ -764,6 +1052,11 @@ function getPageIssues(technicalAudit, scores) {
     if (!technicalAudit.napAudit.hasNAP) {
         issues.push('NAP information missing');
     }
+    if (
+    technicalAudit.internalLinkAudit?.issues?.length > 0
+) {
+    issues.push('Internal link anchor text issues');
+}
 
     return issues;
 }
@@ -843,6 +1136,14 @@ function getRecommendations(technicalAudit, scores) {
     );
 }
 
+if (
+    technicalAudit.internalLinkAudit?.issues?.length > 0
+) {
+    recommendations.push(
+        'Improve internal link anchor text quality and avoid generic anchors.'
+    );
+}
+
     return recommendations;
 }
 
@@ -906,6 +1207,7 @@ async function getTechnicalSeoData(url, scores) {
     const imageAudit = await getImageAudit($, url);
     const schemaAudit = getSchemaAudit($);
     const napAudit = getNAPAudit($);
+    const internalLinkAudit = getInternalLinkAudit($, url);
     const technicalAudit = {
         titleText,
         titleLength: getTextLength(titleText),
@@ -935,6 +1237,7 @@ async function getTechnicalSeoData(url, scores) {
         imageAudit,
         schemaAudit,
         napAudit,
+        internalLinkAudit,
         openGraph: {
             ogTitle: $('meta[property="og:title"]').length > 0,
             ogDescription: $('meta[property="og:description"]').length > 0,
