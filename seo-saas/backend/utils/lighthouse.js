@@ -894,11 +894,45 @@ function getInternalLinkAudit($, pageUrl) {
             |------------------------------------------------------------------
             */
 
-            else if (anchorText.length > 15) {
+            /*
+|------------------------------------------------------------------
+| KEYWORD RICH
+|------------------------------------------------------------------
+*/
 
-                status = 'Keyword Rich';
+else {
 
-            }
+    const keywordPatterns = [
+    'buy',
+    'best',
+    'services',
+    'solutions',
+    'manufacturer',
+    'supplier',
+    'wholesale',
+    'seo services',
+    'digital marketing',
+    'software development'
+];
+
+    const words =
+        lowerAnchor.split(/\s+/);
+
+    const hasKeyword =
+        keywordPatterns.some(keyword =>
+            lowerAnchor.includes(keyword)
+        );
+
+    if (
+        words.length >= 4 &&
+        hasKeyword
+    ) {
+
+        status = 'Keyword Rich';
+
+    }
+
+}
 
             /*
             |------------------------------------------------------------------
